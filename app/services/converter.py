@@ -1,9 +1,8 @@
 from typing import Dict, Any, List
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import anyio.to_thread
 import pandas as pd
 import subprocess
-import textwrap
 import os
 import re
 
@@ -80,20 +79,44 @@ async def run_text2qti(input_path: str, workdir: str) -> str:
 
 
 @dataclass
+class Feedback:
+    general: str
+    correct: str
+    incorrect: str
+
+
+@dataclass
 class Question:
     text: str
     type: str
     points: str
     options: list[str]
     correct: list[str]
-    feedback: dict
+    feedback: Feedback
+
+
+@dataclass
+class Settings:
+    shuffle_answers: bool
+    show_correct_answers: bool
+    one_question_at_a_time: bool
+    cant_go_back: bool
+
+
+def default_settings():
+    return Settings(
+        shuffle_answers=False,
+        show_correct_answers=False,
+        one_question_at_a_time=False,
+        cant_go_back=False
+    )
 
 
 @dataclass
 class Quiz:
     title: str
     questions: List[Question]
-    settings: List[Any]
+    settings: Settings
 
 
 def normalize_row(row):
@@ -122,11 +145,11 @@ def normalize_row(row):
         points=str(row["Question Points"]) if not pd.isna(row["Question Points"]) else "1",
         options=options,
         correct=parse_list(row.get("Correct Answer(s)")),
-        feedback={
-            "general": clean(row.get("Question Feedback")),
-            "correct": clean(row.get("Correct Answer Feedback")),
-            "incorrect": clean(row.get("Incorrect Answer Feedback")),
-        }
+        feedback= Feedback(
+            general=clean(row.get("Question Feedback")),
+            correct=clean(row.get("Correct Answer Feedback")),
+            incorrect=clean(row.get("Incorrect Answer Feedback")),
+    )
     )
 
 
@@ -220,6 +243,11 @@ def validate_question(q: Question):
         raise ValueError("Question point values must be positive integers or half-integers")
 
 
+def validate_settings(s: Settings):
+    if s.cant_go_back and not s.one_question_at_a_time:
+        raise ValueError("Can't go can only be set if one question at a time is also enabled")
+
+
 def excel_to_json(input_path: str):
     df = pd.read_excel(input_path, dtype=str, engine="openpyxl");
 
@@ -241,14 +269,14 @@ def excel_to_json(input_path: str):
 def render_feedback(feedback):
     out = []
 
-    if feedback['general']:
-        out.append(f"... {feedback['general']}")
+    if feedback.general:
+        out.append(f"... {feedback.general}")
 
-    if feedback['correct']:
-        out.append(f"+   {feedback['correct']}")
+    if feedback.correct:
+        out.append(f"+   {feedback.correct}")
 
-    if feedback['incorrect']:
-        out.append(f"-   {feedback['incorrect']}")
+    if feedback.incorrect:
+        out.append(f"-   {feedback.incorrect}")
 
     return out
 

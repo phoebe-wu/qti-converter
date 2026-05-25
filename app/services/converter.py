@@ -1,5 +1,5 @@
 from typing import Dict, Any, List
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 import anyio.to_thread
 import pandas as pd
 import subprocess
@@ -70,7 +70,7 @@ def run_text2qti_sync(input_path: str, workdir: str) -> str:
     return output_path
 
 
-async def run_text2qti(input_path: str, workdir: str) -> str:
+async def run_text2qti(input_path: str, workdir: str):
     return await anyio.to_thread.run_sync(
         run_text2qti_sync,
         input_path,
@@ -116,12 +116,10 @@ def default_settings():
 class Quiz:
     title: str
     questions: List[Question]
-    settings: Settings
+    settings: List[Any]
 
 
 def normalize_row(row):
-    print(row)
-
     def clean(val):
         if pd.isna(val):
             return None
@@ -145,11 +143,11 @@ def normalize_row(row):
         points=str(row["Question Points"]) if not pd.isna(row["Question Points"]) else "1",
         options=options,
         correct=parse_list(row.get("Correct Answer(s)")),
-        feedback= Feedback(
+        feedback=Feedback(
             general=clean(row.get("Question Feedback")),
             correct=clean(row.get("Correct Answer Feedback")),
             incorrect=clean(row.get("Incorrect Answer Feedback")),
-    )
+        )
     )
 
 
@@ -212,6 +210,9 @@ def validate_essay(q: Question):
     if q.correct:
         raise ValueError("Essay questions should not have correct answers")
 
+    if q.feedback.incorrect or q.feedback.correct:
+        raise ValueError("Essay questions only support general question feedback")
+
 
 def validate_file_upload(q: Question):
     if q.options:
@@ -219,6 +220,9 @@ def validate_file_upload(q: Question):
 
     if q.correct:
         raise ValueError("File upload questions should not have correct answers")
+
+    if q.feedback.incorrect or q.feedback.correct:
+        raise ValueError("File upload questions only support general question feedback")
 
 
 def validate_question(q: Question):
@@ -249,7 +253,7 @@ def validate_settings(s: Settings):
 
 
 def excel_to_json(input_path: str):
-    df = pd.read_excel(input_path, dtype=str, engine="openpyxl");
+    df = pd.read_excel(input_path, dtype=str, engine="openpyxl")
 
     questions = []
 
@@ -403,8 +407,10 @@ def render_quiz(quiz: Quiz):
     return "\n".join(out)
 
 
-def export_markdown(quiz, output_path):
+def export_markdown(quiz, output_dir):
     md = render_quiz(quiz)
+
+    output_path = os.path.join(output_dir, f"{quiz.title}.md")
 
     with open(output_path, "w", encoding="utf-8") as f:
         f.write(md)

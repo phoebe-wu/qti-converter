@@ -7,6 +7,22 @@ import os
 import re
 
 
+class Text2QTIError(Exception):
+    def __init__(self, file, line, message, raw=""):
+        self.file = file
+        self.line = line
+        self.message = message
+        self.raw = raw
+        super().__init__(message)
+
+
+class SpreadsheetError(Exception):
+    def __init__(self, question: int, message: str, ):
+        self.question = question
+        self.message = message
+        super().__init__(message)
+
+
 def extract_text2qti_error(err: str) -> Dict[str, Any]:
     lines = err.splitlines()
 
@@ -54,13 +70,13 @@ def run_text2qti_sync(input_path: str, workdir: str) -> str:
     except subprocess.CalledProcessError as e:
         err = e.stdout or e.stderr or "Unknown Error"
         clean_error = extract_text2qti_error(err)
-        raise RuntimeError(clean_error)
+        raise Text2QTIError(clean_error)
 
     base = os.path.splitext(os.path.basename(input_path))[0]
     output_path = os.path.join(workdir, f'{base}.zip')
 
     if not os.path.exists(output_path):
-        raise RuntimeError({
+        raise Text2QTIError({
             "type": "missing_output",
             "file": None,
             "line": None,
@@ -151,47 +167,47 @@ def normalize_row(row):
     )
 
 
-def validate_mc(q: Question):
+def validate_mc(q: Question, idx: int):
     if len(q.correct) < 1:
-        raise ValueError("Multiple choice questions must have at least one correct answer")
+        raise SpreadsheetError(idx, "Multiple choice questions must have at least one correct answer")
 
     if len(set(q.options)) != len(q.options):
-        raise ValueError("Duplicate correct answers provided")
+        raise SpreadsheetError(idx, "Duplicate correct answers provided")
 
     if len(q.options) < 2:
-        raise ValueError("Multiple choice questions must have at least two options")
+        raise SpreadsheetError(idx, "Multiple choice questions must have at least two options")
 
     if not all(c.isdigit() for c in q.correct):
-        raise ValueError("Multiple choice answers must be numeric indices only")
+        raise SpreadsheetError(idx, "Multiple choice answers must be numeric indices only")
 
     for c in q.correct:
         idx = int(c)
         if idx < 1 or idx > len(q.options):
-            raise ValueError("Answer index out of range")
+            raise SpreadsheetError(idx, "Answer index out of range")
 
 
-def validate_short_answer(q: Question):
+def validate_short_answer(q: Question, idx: int):
     if q.options:
-        raise ValueError("Short answer questions do not require options")
+        raise SpreadsheetError(idx, "Short answer questions do not require options")
 
     if not q.correct:
-        raise ValueError("Short answer questions must have at least one correct answer")
+        raise SpreadsheetError(idx, "Short answer questions must have at least one correct answer")
 
     if len(set(q.options)) != len(q.options):
-        raise ValueError("Duplicate correct answers provided")
+        raise SpreadsheetError(idx, "Duplicate correct answers provided")
 
     if all(a.isdigit() for a in q.correct):
-        raise ValueError("Numeric answers should use the numerical question type")
+        raise SpreadsheetError(idx, "Numeric answers should use the numerical question type")
 
 
-def validate_numerical(q: Question):
+def validate_numerical(q: Question, idx: int):
     if q.options:
-        raise ValueError("Numerical must not have options")
+        raise SpreadsheetError(idx, "Numerical must not have options")
 
     answer = q.correct[0]
 
     if not answer:
-        raise ValueError("Numerical questions must have at least one correct answer")
+        raise SpreadsheetError(idx, "Numerical questions must have at least one correct answer")
 
     patterns = [
         r"\d+(\.\d+)?",  # single number
@@ -200,56 +216,59 @@ def validate_numerical(q: Question):
     ]
 
     if not any(re.fullmatch(p, answer) for p in patterns):
-        raise ValueError(f"Invalid numerical format: {answer}")
+        raise SpreadsheetError(idx, f"Invalid numerical format: {answer}")
 
 
-def validate_essay(q: Question):
+def validate_essay(q: Question, idx: int):
     if q.options:
-        raise ValueError("Essay questions must not have options")
+        raise SpreadsheetError(idx, "Essay questions must not have options")
 
     if q.correct:
-        raise ValueError("Essay questions should not have correct answers")
+        raise SpreadsheetError(idx, "Essay questions should not have correct answers")
 
     if q.feedback.incorrect or q.feedback.correct:
-        raise ValueError("Essay questions only support general question feedback")
+        raise SpreadsheetError(idx, "Essay questions only support general question feedback")
 
 
-def validate_file_upload(q: Question):
+def validate_file_upload(q: Question, idx: int):
     if q.options:
-        raise ValueError("File upload questions must not have options")
+        raise SpreadsheetError(idx, "File upload questions must not have options")
 
     if q.correct:
-        raise ValueError("File upload questions should not have correct answers")
+        raise SpreadsheetError(idx, "File upload questions should not have correct answers")
 
     if q.feedback.incorrect or q.feedback.correct:
-        raise ValueError("File upload questions only support general question feedback")
+        raise SpreadsheetError(idx, "File upload questions only support general question feedback")
 
 
-def validate_question(q: Question):
+def validate_question(q: Question, idx: int):
     qtype = q.type
 
-    if qtype == "multiple choice":
-        validate_mc(q)
+    if not qtype:
+        raise SpreadsheetError(idx, "Missing question type")
+
+    elif qtype == "multiple choice":
+        validate_mc(q, idx)
 
     elif qtype == "short answer":
-        validate_short_answer(q)
+        validate_short_answer(q, idx)
 
     elif qtype == "numerical":
-        validate_numerical(q)
+        validate_numerical(q, idx)
 
     elif qtype == "essay":
-        validate_essay(q)
+        validate_essay(q, idx)
 
     elif qtype == "file upload":
-        validate_file_upload(q)
+        validate_file_upload(q, idx)
 
     if not re.fullmatch(r"\d+(\.5)?", q.points):
-        raise ValueError("Question point values must be positive integers or half-integers")
+        raise SpreadsheetError(idx, "Question point values must be positive integers or half-integers")
 
 
 def validate_settings(s: Settings):
     if s.cant_go_back and not s.one_question_at_a_time:
-        raise ValueError("Can't go can only be set if one question at a time is also enabled")
+        raise SpreadsheetError("Can't go can only be set if one question at a time is also enabled")
 
 
 def excel_to_json(input_path: str):
@@ -257,10 +276,10 @@ def excel_to_json(input_path: str):
 
     questions = []
 
-    for _, row in df.iterrows():
+    for idx, row in df.iterrows():
         if row["Question Text"]:
             q = normalize_row(row)
-            validate_question(q)
+            validate_question(q, idx+1)
             questions.append(q)
 
     return Quiz(
@@ -418,11 +437,46 @@ def export_markdown(quiz, output_dir):
     return output_path
 
 
-def flexiquiz_response_summary_to_markdown(input_file):
-    df = pd.read_excel(input_file, header=None)
+def flexiquiz_response_summary_separate_questions(input_path):
+    df = pd.read_excel(input_path, header=None)
+    data = df.iloc[2:, :2]
 
-    lines = []
+    questions = []
+    q = []
 
-    for _, row in df.iterrows():
-        a, b = row[0], row[1]  # extract first 2 column values
-        print(a, b)
+    for _, row in data.iterrows():
+        # print(row)
+        a, b = row[0], row[1]
+        if (not pd.isna(a) and not str(a).startswith("(Question updated on ")) or (
+                not pd.isna(b) and not str(b).endswith(
+                "of respondents answered this multiple choice question correctly")):
+            q.append([a, b])
+        elif pd.isna(a) and pd.isna(b):
+            questions.append(q)
+            q = []
+
+    return questions
+
+
+def flexiquiz_convert_questions(raw_questions):
+    res = []
+    for q in raw_questions:
+        res.append(convert_to_question(q))
+
+
+def parse_short_answer(raw_options):
+    pass
+
+
+def convert_to_question(raw):
+    print("---------------")
+    qtext = raw[0][0]
+
+    raw_options = raw[1:]
+    if len(raw_options) == 1 or all(x[0] == "✓" for x in raw_options):
+        parse_short_answer(raw_options)
+    else:
+        qcorrect = []
+        qoptions = []
+
+    return "hi"

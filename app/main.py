@@ -7,7 +7,9 @@ from fastapi import FastAPI, UploadFile, File, HTTPException, BackgroundTasks
 from fastapi.responses import Response, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 
-from services.converter import run_text2qti, excel_to_json, export_markdown
+from services.converter import (run_text2qti, excel_to_json, export_markdown,
+                                flexiquiz_response_summary_separate_questions,
+                                flexiquiz_convert_questions, SpreadsheetError, Text2QTIError)
 
 app = FastAPI()
 
@@ -60,18 +62,35 @@ async def convert_file(file: UploadFile = File(...), background_tasks: Backgroun
             }
         )
 
-    except Exception as e:
+    except SpreadsheetError as e:
         shutil.rmtree(tmpdir, ignore_errors=True)
-        detail = e.args[0] if isinstance(e.args[0], dict) else str(e)
         return JSONResponse(
             status_code=400,
-            content=detail
+            content={
+                "type": "spreadsheet_error",
+                "question": e.question,
+                "detail": e.message
+            }
+        )
+
+    except Text2QTIError as e:
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+        return JSONResponse(
+            status_code=400,
+            content={
+                "type": "text2qti_error",
+                "file": e.file,
+                "line": e.line,
+                "detail": e.message,
+                "raw": e.raw
+            }
         )
 
 
 def main():
-    q = excel_to_json("../input/test.xlsx")
-    export_markdown(q, "../output")
+    questions = flexiquiz_response_summary_separate_questions("../input/oceans_101.xlsx")
+    flexiquiz_convert_questions(questions)
 
 
 if __name__ == "__main__":
